@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D.C. Metro</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="header">
+    <h1>D.C. Metro</h1>
+    <p class="subtitle">Drag to pan · Scroll to zoom · Pick a route below or click two stations</p>
+  </header>
+
+  <canvas id="canvas"></canvas>
+
+  <div id="legend"></div>
+
+  <div id="journey-panel">
+    <div class="journey-row">
+      <label for="from-select">From</label>
+      <select id="from-select"></select>
+    </div>
+    <div class="journey-row">
+      <label for="to-select">To</label>
+      <select id="to-select"></select>
+    </div>
+    <div class="journey-row">
+      <label for="algorithm-select">Search algorithm</label>
+      <select id="algorithm-select"></select>
+    </div>
+    <div class="journey-actions">
+      <button id="ride-btn">Animate route</button>
+      <button id="clear-btn" hidden>Clear</button>
+    </div>
+    <p id="journey-status"></p>
+  </div>
+
+  <div id="tooltip" hidden></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/route.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
