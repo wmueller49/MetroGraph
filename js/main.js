@@ -57,12 +57,26 @@ function fitToScreen() {
   const maxY = Math.max(...ys) * UNIT;
   const mapWidth = maxX - minX;
   const mapHeight = maxY - minY;
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  // On phones the journey panel covers the bottom of the screen, so center the
+  // map in the space above it and zoom past a full fit (edges may be cut off).
+  if (window.matchMedia("(max-width: 600px)").matches) {
+    const top = document.getElementById("header").getBoundingClientRect().bottom;
+    const bottom = document.getElementById("journey-panel").getBoundingClientRect().top;
+    const areaHeight = bottom - top;
+    const fit = Math.min(width / mapWidth, areaHeight / mapHeight);
+    view.scale = clampScale(fit * 1.35);
+    view.offsetX = width / 2 - centerX * view.scale;
+    view.offsetY = top + areaHeight / 2 - centerY * view.scale;
+    return;
+  }
+
   const padding = 120;
   const scaleX = (width - padding * 2) / mapWidth;
   const scaleY = (height - padding * 2) / mapHeight;
   view.scale = Math.min(scaleX, scaleY, 1.1);
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
   view.offsetX = width / 2 - centerX * view.scale;
   view.offsetY = height / 2 - centerY * view.scale;
 }
@@ -339,10 +353,11 @@ window.addEventListener("resize", () => {
 });
 
 resize();
-fitToScreen();
 populateSelects();
 renderLegend();
 clearJourney();
+// After the panel is filled in, so its measured height is final.
+fitToScreen();
 requestAnimationFrame(frame);
 
 })();

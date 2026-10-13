@@ -202,16 +202,14 @@ html, body {
 
 @media (max-width: 600px) {
   #legend {
-    left: 8px;
-    right: 8px;
-    bottom: 8px;
-    max-height: 25vh;
+    display: none;
   }
 
   #journey-panel {
+    top: auto;
     left: 8px;
     right: 8px;
-    top: 64px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
     width: auto;
   }
 
