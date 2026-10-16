@@ -14,6 +14,8 @@ const rideBtn = document.getElementById("ride-btn");
 const clearBtn = document.getElementById("clear-btn");
 const statusEl = document.getElementById("journey-status");
 const citySelect = document.getElementById("city-select");
+const journeyPanel = document.getElementById("journey-panel");
+const panelToggle = document.getElementById("panel-toggle");
 
 const JOURNEY_SPEED = 120; // world px/sec (independent of zoom, like real travel time)
 // Search replay pacing: seconds per station reached, capped so long searches
@@ -216,6 +218,14 @@ rideBtn.addEventListener("click", () => {
 });
 
 clearBtn.addEventListener("click", clearJourney);
+
+// On phones the panel can be minimized to free up the map. Tapping stations
+// keeps working while it's minimized, since that only drives the (hidden)
+// selects and the status line, which stays visible.
+panelToggle.addEventListener("click", () => {
+  const collapsed = journeyPanel.classList.toggle("collapsed");
+  panelToggle.setAttribute("aria-expanded", String(!collapsed));
+});
 
 // Switching algorithms mid-trip replays the same trip with the new search.
 algorithmSelect.addEventListener("change", () => {

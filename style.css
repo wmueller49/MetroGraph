@@ -144,6 +144,17 @@ html, body {
   backdrop-filter: blur(6px);
 }
 
+#journey-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Minimize handle for the journey panel; only shown on phones. */
+#panel-toggle {
+  display: none;
+}
+
 .journey-row {
   display: flex;
   flex-direction: column;
@@ -267,5 +278,43 @@ html, body {
 
   #header {
     padding: 12px 12px 8px;
+  }
+
+  #panel-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin: -4px 0 0;
+    padding: 4px 2px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+
+  .panel-toggle-chevron {
+    width: 12px;
+    height: 8px;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%239aa0a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center;
+    transition: transform 0.15s ease;
+  }
+
+  /* Minimized: only the handle and the status line stay visible, so trips
+     picked by tapping stations still report their progress. */
+  #journey-panel.collapsed {
+    gap: 6px;
+  }
+
+  #journey-panel.collapsed #journey-controls {
+    display: none;
+  }
+
+  #journey-panel.collapsed .panel-toggle-chevron {
+    transform: rotate(180deg);
   }
 }

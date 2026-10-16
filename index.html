@@ -17,21 +17,27 @@
   <div id="legend"></div>
 
   <div id="journey-panel">
-    <div class="journey-row">
-      <label for="from-select">From</label>
-      <select id="from-select"></select>
-    </div>
-    <div class="journey-row">
-      <label for="to-select">To</label>
-      <select id="to-select"></select>
-    </div>
-    <div class="journey-row">
-      <label for="algorithm-select">Search algorithm</label>
-      <select id="algorithm-select"></select>
-    </div>
-    <div class="journey-actions">
-      <button id="ride-btn">Animate route</button>
-      <button id="clear-btn" hidden>Clear</button>
+    <button id="panel-toggle" type="button" aria-expanded="true" aria-controls="journey-controls">
+      <span class="panel-toggle-label">Trip planner</span>
+      <span class="panel-toggle-chevron" aria-hidden="true"></span>
+    </button>
+    <div id="journey-controls">
+      <div class="journey-row">
+        <label for="from-select">From</label>
+        <select id="from-select"></select>
+      </div>
+      <div class="journey-row">
+        <label for="to-select">To</label>
+        <select id="to-select"></select>
+      </div>
+      <div class="journey-row">
+        <label for="algorithm-select">Search algorithm</label>
+        <select id="algorithm-select"></select>
+      </div>
+      <div class="journey-actions">
+        <button id="ride-btn">Animate route</button>
+        <button id="clear-btn" hidden>Clear</button>
+      </div>
     </div>
     <p id="journey-status"></p>
   </div>
