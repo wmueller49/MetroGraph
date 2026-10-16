@@ -327,11 +327,10 @@ canvas.addEventListener("touchmove", (e) => {
   }
 }, { passive: true });
 
+// Taps aren't handled here: the browser follows a tap with a click event, which
+// the click handler above picks up. Handling both selected each station twice.
 canvas.addEventListener("touchend", (e) => {
   if (e.touches.length === 0) {
-    if (!didDrag && lastX && lastY) {
-      handleStationClick(findStationAt(view, lastX, lastY));
-    }
     isPanning = false;
     lastTouchDist = null;
   }
