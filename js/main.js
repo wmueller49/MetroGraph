@@ -1,7 +1,7 @@
 (function () {
-const { STATIONS, LINES } = window.MetroData;
+const { STATIONS, LINES, SYSTEMS, systemId, name: systemName, defaultFrom, defaultTo } = window.MetroData;
 const { UNIT, STATION_LINES, draw, worldToScreen, screenToWorld, findStationAt, stationScreenPos } = window.MetroRender;
-const { ALGORITHMS, findRoute, buildRoutePath, transferCount } = window.MetroRoute;
+const { ALGORITHMS, findRoute, buildRoutePath, rideHops, transferCount } = window.MetroRoute;
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -13,6 +13,7 @@ const algorithmSelect = document.getElementById("algorithm-select");
 const rideBtn = document.getElementById("ride-btn");
 const clearBtn = document.getElementById("clear-btn");
 const statusEl = document.getElementById("journey-status");
+const citySelect = document.getElementById("city-select");
 
 const JOURNEY_SPEED = 120; // world px/sec (independent of zoom, like real travel time)
 // Search replay pacing: seconds per station reached, capped so long searches
@@ -93,15 +94,60 @@ function zoomAt(screenX, screenY, factor) {
   view.offsetY += screenY - after.y;
 }
 
+// --- City picker (the page heading) ---
+// Each city is its own page load (?city=...), since every module derives its
+// lookup tables from the chosen system's data once at startup.
+function setupCityPicker() {
+  document.title = systemName;
+  citySelect.innerHTML = SYSTEMS.map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
+  citySelect.value = systemId;
+  fitSelectToText(citySelect);
+  citySelect.addEventListener("change", () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("city", citySelect.value);
+    window.location.href = url.toString();
+  });
+}
+
+// A <select> is as wide as its longest option; size it to the chosen one so
+// the chevron sits right after the heading text.
+function fitSelectToText(select) {
+  const style = getComputedStyle(select);
+  const measure = document.createElement("canvas").getContext("2d");
+  measure.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  const text = select.selectedOptions[0].text;
+  const letterSpacing = parseFloat(style.letterSpacing) || 0;
+  const textWidth = measure.measureText(text).width + letterSpacing * text.length;
+  const chrome = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"].reduce((sum, k) => sum + parseFloat(style[k]), 0);
+  select.style.width = `${Math.ceil(textWidth + chrome)}px`;
+}
+
 // --- Route picker ---
-const SORTED_STATION_IDS = Object.keys(STATIONS).sort((a, b) => STATIONS[a].name.localeCompare(STATIONS[b].name));
+// Waypoints (where track bends between stations) are served by no line.
+const SORTED_STATION_IDS = Object.keys(STATIONS).filter((id) => STATION_LINES[id].length > 0).sort(
+  (a, b) => STATIONS[a].name.localeCompare(STATIONS[b].name, undefined, { numeric: true }) || lineNames(a).localeCompare(lineNames(b))
+);
+
+// Names shared by several stations (NYC has five "86 St"s) get their lines
+// added in the dropdowns so they can be told apart.
+const NAME_COUNTS = {};
+for (const s of Object.values(STATIONS)) NAME_COUNTS[s.name] = (NAME_COUNTS[s.name] || 0) + 1;
+
+function lineNames(id) {
+  return [...new Set(STATION_LINES[id].map((lid) => LINES.find((l) => l.id === lid).name))].join(" ");
+}
+
+function optionLabel(id) {
+  const name = STATIONS[id].name;
+  return NAME_COUNTS[name] > 1 ? `${name} (${lineNames(id)})` : name;
+}
 
 function populateSelects() {
   for (const select of [fromSelect, toSelect]) {
-    select.innerHTML = SORTED_STATION_IDS.map((id) => `<option value="${id}">${STATIONS[id].name}</option>`).join("");
+    select.innerHTML = SORTED_STATION_IDS.map((id) => `<option value="${id}">${optionLabel(id)}</option>`).join("");
   }
-  fromSelect.value = "shady_grove";
-  toSelect.value = "largo";
+  fromSelect.value = defaultFrom;
+  toSelect.value = defaultTo;
   algorithmSelect.innerHTML = ALGORITHMS.map((a) => `<option value="${a.id}">${a.name}</option>`).join("");
 }
 
@@ -153,7 +199,7 @@ function updateStatus(state) {
     return;
   }
   const t = state.t;
-  const stops = journey.path.hops.length;
+  const stops = rideHops(journey.path.hops).length;
   const transfers = transferCount(journey.path.hops);
   const from = STATIONS[journey.startId].name;
   const to = STATIONS[journey.endId].name;
@@ -308,10 +354,7 @@ function handleHover(x, y) {
   tooltipEl.innerHTML = `
     <div class="tooltip-title">${s.name}</div>
     <div class="tooltip-lines">
-      ${lines.map((lid) => {
-        const line = LINES.find((l) => l.id === lid);
-        return `<span class="tooltip-dot" style="background:${line.color}"></span>`;
-      }).join("")}
+      ${lines.map((lid) => lineBadge(LINES.find((l) => l.id === lid), "tooltip-dot")).join("")}
     </div>
   `;
   const pos = stationScreenPos(view, id);
@@ -320,13 +363,20 @@ function handleHover(x, y) {
   tooltipEl.hidden = false;
 }
 
+// A line's colored marker. Lines with a letter/number name (NYC's services)
+// get it printed in a round bullet, as on the MTA map, since several share a color.
+function lineBadge(line, className) {
+  if (!line.textColor) return `<span class="${className}" style="background:${line.color}"></span>`;
+  return `<span class="${className} bullet" style="background:${line.color};color:${line.textColor}">${line.name}</span>`;
+}
+
 // --- Legend ---
 function renderLegend() {
   legendEl.innerHTML = "";
   for (const line of LINES) {
     const item = document.createElement("div");
     item.className = "legend-item" + (ui.hiddenLines.has(line.id) ? " dimmed" : "");
-    item.innerHTML = `<span class="legend-swatch" style="background:${line.color}"></span><span>${line.name} Line</span>`;
+    item.innerHTML = `${lineBadge(line, "legend-swatch")}<span>${line.label || `${line.name} Line`}</span>`;
     item.addEventListener("click", () => {
       if (ui.hiddenLines.has(line.id)) ui.hiddenLines.delete(line.id);
       else ui.hiddenLines.add(line.id);
@@ -353,6 +403,7 @@ window.addEventListener("resize", () => {
 });
 
 resize();
+setupCityPicker();
 populateSelects();
 renderLegend();
 clearJourney();

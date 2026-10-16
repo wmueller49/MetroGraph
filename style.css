@@ -53,6 +53,36 @@ html, body {
   letter-spacing: 0.02em;
 }
 
+/* The city picker doubles as the page title: styled as heading text with a
+   dropdown chevron, rather than as a form control. */
+#city-select {
+  pointer-events: auto;
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0 0 0 -8px;
+  padding: 2px 30px 2px 8px;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--text);
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%239aa0a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#city-select:hover,
+#city-select:focus-visible {
+  background-color: rgba(255, 255, 255, 0.06);
+  border-color: var(--border);
+  outline: none;
+}
+
+#city-select option {
+  font-size: 0.9rem;
+  font-weight: 400;
+  background: #14171b;
+}
+
 .subtitle {
   margin: 4px 0 0;
   font-size: 0.8rem;
@@ -198,6 +228,28 @@ html, body {
   height: 9px;
   border-radius: 50%;
   display: inline-block;
+}
+
+.bullet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.legend-swatch.bullet {
+  width: 16px;
+  height: 16px;
+  font-size: 0.65rem;
+}
+
+#tooltip .tooltip-dot.bullet {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  font-size: 0.65rem;
 }
 
 @media (max-width: 600px) {

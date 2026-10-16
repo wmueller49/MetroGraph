@@ -221,6 +221,18 @@ const LINES = [
   },
 ];
 
-window.MetroData = { STATIONS, LINES };
+window.MetroSystems = window.MetroSystems || {};
+window.MetroSystems.dc = {
+  name: "D.C. Metro",
+  defaultFrom: "shady_grove",
+  defaultTo: "largo",
+  // Left-to-right order (relative to the direction of travel) of lines sharing
+  // track. Chosen so each line peels off the trunk from the side it leaves
+  // toward, e.g. Blue sits on the south side of the Orange/Silver/Blue trunk
+  // because it turns south at Rosslyn, so branching lines never cross.
+  trackOrder: ["orange", "silver", "blue", "yellow", "green", "red"],
+  STATIONS,
+  LINES,
+};
 
 })();

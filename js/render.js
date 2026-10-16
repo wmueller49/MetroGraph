@@ -1,5 +1,5 @@
 (function () {
-const { STATIONS, LINES } = window.MetroData;
+const { STATIONS, LINES, TRACK_ORDER, TRANSFERS } = window.MetroData;
 
 // Pixels per grid unit at zoom level 1.
 const UNIT = 44;
@@ -24,59 +24,63 @@ const BG_COLOR = "#0b0d10";
 const LABEL_FONT_SIZE = 11;
 const LABEL_HEIGHT = 13;
 
-// Map of stationId -> [lineId, ...] serving it, used for interchange styling & tooltips.
+// Map of stationId -> [lineId, ...] stopping there, used for interchange styling & tooltips.
 const STATION_LINES = (() => {
   const map = {};
   for (const id of Object.keys(STATIONS)) map[id] = [];
   for (const line of LINES) {
-    for (const stopId of line.stops) {
-      if (!map[stopId].includes(line.id)) map[stopId].push(line.id);
+    for (const branch of line.branches) {
+      for (const stopId of branch.stops) {
+        if (!map[stopId].includes(line.id)) map[stopId].push(line.id);
+      }
     }
   }
   return map;
 })();
 
+// Every branch's full track (including stations run through without stopping).
+const LINE_PATHS = LINES.flatMap((l) => l.branches.map((b) => ({ line: l, path: b.path })));
+
 // Stations at the end of any line, labelled ahead of ordinary stops.
-const TERMINI = new Set(LINES.flatMap((l) => [l.stops[0], l.stops[l.stops.length - 1]]));
+const TERMINI = new Set(LINES.flatMap((l) => l.branches.flatMap((b) => [b.stops[0], b.stops[b.stops.length - 1]])));
 
 // Stations where track actually branches or crosses (3+ neighboring stops),
 // e.g. Metro Center or Rosslyn, as opposed to stops that merely sit on a
 // stretch shared by several lines. These are labelled first of all.
 const JUNCTIONS = (() => {
   const neighbors = {};
-  for (const line of LINES) {
-    line.stops.forEach((id, i) => {
+  for (const { path } of LINE_PATHS) {
+    path.forEach((id, i) => {
       neighbors[id] = neighbors[id] || new Set();
-      if (i > 0) neighbors[id].add(line.stops[i - 1]);
-      if (i < line.stops.length - 1) neighbors[id].add(line.stops[i + 1]);
+      if (i > 0) neighbors[id].add(path[i - 1]);
+      if (i < path.length - 1) neighbors[id].add(path[i + 1]);
     });
   }
   return new Set(Object.keys(neighbors).filter((id) => neighbors[id].size >= 3));
 })();
 
-const COLOR_BY_LINE = Object.fromEntries(LINES.map((l) => [l.id, l.color]));
+// Stations linked by a walking transfer to another platform of their complex.
+const TRANSFER_IDS = new Set(TRANSFERS.flat());
+const TRANSFER_COLOR = "#e8eaed";
+
+const COLOR_BY_LINE = Object.fromEntries([...LINES.map((l) => [l.id, l.color]), ["transfer", TRANSFER_COLOR]]);
 function lineColor(id) {
   return COLOR_BY_LINE[id];
 }
 
-// Left-to-right order (relative to the direction of travel) of lines sharing
-// track. Chosen so each line peels off the trunk from the side it leaves
-// toward, e.g. Blue sits on the south side of the Orange/Silver/Blue trunk
-// because it turns south at Rosslyn, so branching lines never cross.
-const TRACK_ORDER = ["orange", "silver", "blue", "yellow", "green", "red"];
-
 // Map of "stationA|stationB" (sorted) -> { ids, from } for the lines sharing
-// that edge: `ids` in TRACK_ORDER, and `from` the station the first line to
+// that edge: `ids` in the system's TRACK_ORDER (left-to-right order of lines
+// sharing track), and `from` the station the first line to
 // claim the edge travels away from, which fixes which side is "left" so lines
 // running the edge in opposite directions still agree on their slots.
 // Built once from the full route list, independent of the legend's hidden-line
 // toggle, so visible tracks don't shift position when another line is hidden.
 const EDGE_LINE_IDS = (() => {
   const map = new Map();
-  for (const line of LINES) {
-    for (let i = 0; i < line.stops.length - 1; i++) {
-      const a = line.stops[i];
-      const b = line.stops[i + 1];
+  for (const { line, path } of LINE_PATHS) {
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i];
+      const b = path[i + 1];
       const key = a < b ? `${a}|${b}` : `${b}|${a}`;
       if (!map.has(key)) map.set(key, { ids: [], from: a });
       const edge = map.get(key);
@@ -145,12 +149,16 @@ function trackPolyline(view, stationIds, lineIds) {
       const cross = dirIn.x * dirOut.y - dirIn.y * dirOut.x;
       const p1 = { x: base.x + inOff.x, y: base.y + inOff.y };
       const p2 = { x: base.x + outOff.x, y: base.y + outOff.y };
-      if (Math.abs(cross) < 1e-6) {
+      const t = Math.abs(cross) < 1e-6 ? Infinity : ((p2.x - p1.x) * dirOut.y - (p2.y - p1.y) * dirOut.x) / cross;
+      const miter = { x: p1.x + dirIn.x * t, y: p1.y + dirIn.y * t };
+      // On a nearly straight run (or a hairpin) the offset tracks meet far
+      // from the station, so jog between them at the station instead.
+      const reach = Math.hypot(inOff.x, inOff.y) + Math.hypot(outOff.x, outOff.y) + 1;
+      if (!(Math.hypot(miter.x - base.x, miter.y - base.y) <= reach * 2)) {
         points.push(p1);
         if (Math.hypot(p2.x - p1.x, p2.y - p1.y) > 0.5) points.push(p2);
       } else {
-        const t = ((p2.x - p1.x) * dirOut.y - (p2.y - p1.y) * dirOut.x) / cross;
-        points.push({ x: p1.x + dirIn.x * t, y: p1.y + dirIn.y * t });
+        points.push(miter);
       }
     }
     last.push(points.length - 1);
@@ -226,6 +234,7 @@ function findStationAt(view, screenX, screenY) {
   let closestId = null;
   let closestDist = Infinity;
   for (const id of Object.keys(STATIONS)) {
+    if (!STATION_LINES[id].length) continue;
     const s = STATIONS[id];
     const dx = s.x * UNIT - world.x;
     const dy = s.y * UNIT - world.y;
@@ -238,8 +247,9 @@ function findStationAt(view, screenX, screenY) {
   return closestId;
 }
 
-function lineTrack(view, line) {
-  return trackPolyline(view, line.stops, line.stops.slice(1).map(() => line.id));
+// One polyline per branch of the line.
+function lineTracks(view, line) {
+  return line.branches.map(({ path }) => trackPolyline(view, path, path.slice(1).map(() => line.id)));
 }
 
 function drawLine(ctx, view, line, opts) {
@@ -250,20 +260,43 @@ function drawLine(ctx, view, line, opts) {
   ctx.lineJoin = "round";
 
   ctx.beginPath();
-  tracePath(ctx, lineTrack(view, line).points, CORNER_RADIUS * Math.sqrt(view.scale));
+  for (const track of lineTracks(view, line)) tracePath(ctx, track.points, CORNER_RADIUS * Math.sqrt(view.scale));
   ctx.stroke();
   ctx.globalAlpha = 1;
 }
 
+function isInterchange(id) {
+  return STATION_LINES[id].length > 1 || TRANSFER_IDS.has(id);
+}
+
 function stationRadius(view, id) {
-  const isInterchange = STATION_LINES[id].length > 1;
-  return (isInterchange ? INTERCHANGE_RADIUS : STATION_RADIUS) * Math.sqrt(view.scale);
+  return (isInterchange(id) ? INTERCHANGE_RADIUS : STATION_RADIUS) * Math.sqrt(view.scale);
+}
+
+// The walking link between two platforms of a complex: a light bar with a
+// dark core, like the connectors on the MTA map, drawn under the stations.
+function drawTransfer(ctx, view, aId, bId, opts) {
+  const a = stationScreenPos(view, aId);
+  const b = stationScreenPos(view, bId);
+  const s = Math.sqrt(view.scale);
+  ctx.globalAlpha = opts.dimmed ? 0.25 : 1;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.strokeStyle = TRANSFER_COLOR;
+  ctx.lineWidth = INTERCHANGE_RADIUS * 1.4 * s;
+  ctx.stroke();
+  ctx.strokeStyle = BG_COLOR;
+  ctx.lineWidth = INTERCHANGE_RADIUS * 1.4 * s - 5 * s;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
 }
 
 function drawStation(ctx, view, id, opts) {
   const sp = stationScreenPos(view, id);
   const lines = STATION_LINES[id];
-  const isInterchange = lines.length > 1;
+  const interchange = isInterchange(id);
   const radius = stationRadius(view, id) * (opts.hovered === id ? 1.35 : 1);
 
   ctx.globalAlpha = opts.dimmed ? 0.25 : 1;
@@ -271,8 +304,8 @@ function drawStation(ctx, view, id, opts) {
   ctx.arc(sp.x, sp.y, radius, 0, Math.PI * 2);
   ctx.fillStyle = BG_COLOR;
   ctx.fill();
-  ctx.lineWidth = (isInterchange ? 3 : 2.5) * Math.sqrt(view.scale);
-  ctx.strokeStyle = isInterchange ? "#e8eaed" : lines[0] ? lineColor(lines[0]) : "#e8eaed";
+  ctx.lineWidth = (interchange ? 3 : 2.5) * Math.sqrt(view.scale);
+  ctx.strokeStyle = interchange ? "#e8eaed" : lines[0] ? lineColor(lines[0]) : "#e8eaed";
   ctx.stroke();
   ctx.globalAlpha = 1;
 }
@@ -313,9 +346,9 @@ const ROTATED_FIRST = [...LABEL_CANDIDATES.filter((c) => c.rotated), ...LABEL_CA
 const HORIZONTAL_ONLY = (() => {
   const set = new Set();
   for (const id of Object.keys(STATIONS)) {
-    const neighbors = LINES.flatMap((l) => {
-      const i = l.stops.indexOf(id);
-      return i < 0 ? [] : [l.stops[i - 1], l.stops[i + 1]].filter(Boolean);
+    const neighbors = LINE_PATHS.flatMap(({ path }) => {
+      const i = path.indexOf(id);
+      return i < 0 ? [] : [path[i - 1], path[i + 1]].filter(Boolean);
     });
     if (neighbors.every((n) => STATIONS[n].y === STATIONS[id].y)) set.add(id);
   }
@@ -369,6 +402,35 @@ function segmentShape(a, b, halfWidth) {
     { x: b.x + tx - nx, y: b.y + ty - ny },
     { x: a.x - tx - nx, y: a.y - ty - ny },
   ]);
+}
+
+// Buckets shapes by the screen cells their bounding boxes cover, so a
+// collision check only tests shapes nearby rather than every one on the map.
+const GRID_CELL = 64;
+class ShapeGrid {
+  constructor() {
+    this.cells = new Map();
+  }
+  *cellKeys(sh) {
+    for (let cx = Math.floor(sh.minX / GRID_CELL); cx <= Math.floor(sh.maxX / GRID_CELL); cx++) {
+      for (let cy = Math.floor(sh.minY / GRID_CELL); cy <= Math.floor(sh.maxY / GRID_CELL); cy++) yield `${cx},${cy}`;
+    }
+  }
+  add(sh) {
+    for (const key of this.cellKeys(sh)) {
+      if (!this.cells.has(key)) this.cells.set(key, []);
+      this.cells.get(key).push(sh);
+    }
+  }
+  // True if `sh` overlaps any stored shape that `skip` (if given) doesn't exclude.
+  hits(sh, skip) {
+    for (const key of this.cellKeys(sh)) {
+      for (const other of this.cells.get(key) || []) {
+        if (other !== skip && shapesOverlap(sh, other)) return true;
+      }
+    }
+    return false;
+  }
 }
 
 function boxShape(cx, cy, halfW, halfH) {
@@ -427,23 +489,31 @@ function layoutLabels(ctx, view, visibleLines, stationIds, priorityIds, endpoint
   if (labelCache && labelCache.key === key) return labelCache.placements;
 
   const origin = { scale: view.scale, offsetX: 0, offsetY: 0 };
-  const obstacles = [];
+  const obstacles = new ShapeGrid();
   const trackHalfWidth = (ROUTE_LINE_WIDTH * Math.sqrt(view.scale)) / 2 + 1;
   for (const line of visibleLines) {
-    const pts = lineTrack(origin, line).points;
-    for (let i = 0; i < pts.length - 1; i++) obstacles.push(segmentShape(pts[i], pts[i + 1], trackHalfWidth));
+    for (const { points: pts } of lineTracks(origin, line)) {
+      for (let i = 0; i < pts.length - 1; i++) obstacles.add(segmentShape(pts[i], pts[i + 1], trackHalfWidth));
+    }
   }
   const stationShapes = new Map();
+  const stationGrid = new ShapeGrid();
   for (const id of stationIds) {
     const sp = stationScreenPos(origin, id);
     const r = (endpointIds.has(id) ? MARKER_RADIUS * Math.sqrt(view.scale) : stationRadius(view, id)) + 1;
     stationShapes.set(id, boxShape(sp.x, sp.y, r, r));
+    stationGrid.add(stationShapes.get(id));
+  }
+  const visibleIds = new Set(stationIds);
+  for (const [a, b] of TRANSFERS) {
+    if (!visibleIds.has(a) || !visibleIds.has(b)) continue;
+    obstacles.add(segmentShape(stationScreenPos(origin, a), stationScreenPos(origin, b), INTERCHANGE_RADIUS * Math.sqrt(view.scale)));
   }
   // The START / DESTINATION captions drawn above journey endpoints.
   for (const id of endpointIds) {
     const sp = stationScreenPos(origin, id);
     const top = sp.y - MARKER_RADIUS * Math.sqrt(view.scale) - 10;
-    obstacles.push(boxShape(sp.x, top, 40, LABEL_HEIGHT / 2 + 1));
+    obstacles.add(boxShape(sp.x, top, 40, LABEL_HEIGHT / 2 + 1));
   }
 
   const rank = (id) => {
@@ -455,7 +525,7 @@ function layoutLabels(ctx, view, visibleLines, stationIds, priorityIds, endpoint
   const ordered = [...stationIds].sort((a, b) => rank(a) - rank(b));
 
   const placements = new Map();
-  const placedShapes = [];
+  const placedShapes = new ShapeGrid();
   const tryPlace = (id, avoidTracks) => {
     const sp = stationScreenPos(origin, id);
     const gap = labelGap(view, id, endpointIds);
@@ -464,12 +534,12 @@ function layoutLabels(ctx, view, visibleLines, stationIds, priorityIds, endpoint
       const placement = labelPlacement(cand, gap, width);
       const box = shape(placement.quad.map((p) => ({ x: p.x + sp.x, y: p.y + sp.y })));
       const blocked =
-        (avoidTracks && obstacles.some((o) => shapesOverlap(box, o))) ||
-        placedShapes.some((o) => shapesOverlap(box, o)) ||
-        [...stationShapes].some(([sid, o]) => sid !== id && shapesOverlap(box, o));
+        (avoidTracks && obstacles.hits(box)) ||
+        placedShapes.hits(box) ||
+        stationGrid.hits(box, stationShapes.get(id));
       if (!blocked) {
         placements.set(id, { ...placement, backed: !avoidTracks });
-        placedShapes.push(box);
+        placedShapes.add(box);
         return true;
       }
     }
@@ -620,7 +690,7 @@ function drawFoundPulse(ctx, view, id, foundT) {
 }
 
 function routeTrack(view, path) {
-  return trackPolyline(view, path.stationIds, path.hops.map((h) => h.lineId));
+  return trackPolyline(view, path.stationIds, path.segmentLines);
 }
 
 // Draws the highlighted route path, colored per line segment.
@@ -628,11 +698,11 @@ function drawRoute(ctx, view, journey, state) {
   const { path } = journey;
   const track = routeTrack(view, path);
 
-  // Group consecutive same-line hops into runs (by station index) so each
+  // Group consecutive same-line segments into runs (by station index) so each
   // run is drawn as one stroke in its line's color.
   const runs = [];
-  for (let i = 0; i < path.hops.length; i++) {
-    const lineId = path.hops[i].lineId;
+  for (let i = 0; i < path.segmentLines.length; i++) {
+    const lineId = path.segmentLines[i];
     let run = runs[runs.length - 1];
     if (!run || run.lineId !== lineId) {
       run = { lineId, from: i, to: i + 1 };
@@ -663,7 +733,8 @@ function drawRidingTrain(ctx, view, journey, state) {
   // Travel progress is measured in world distance (so speed is constant),
   // then mapped onto the same on-screen hop the route is drawn along.
   const pos = pointAtDistance(path, state.t * path.total);
-  const segIndex = Math.min(pos.segmentIndex, path.hops.length - 1);
+  const lastSeg = path.segmentLines.length - 1;
+  const segIndex = Math.min(pos.segmentIndex, lastSeg);
   const a = track.points[track.last[segIndex]];
   const b = track.points[track.first[segIndex + 1]];
   const sp = { x: a.x + (b.x - a.x) * pos.t, y: a.y + (b.y - a.y) * pos.t };
@@ -678,13 +749,24 @@ function drawRidingTrain(ctx, view, journey, state) {
   };
   const TURN_ZONE = 0.2;
   let angle = heading(segIndex);
-  if (pos.t > 1 - TURN_ZONE && segIndex < path.hops.length - 1) {
+  if (pos.t > 1 - TURN_ZONE && segIndex < lastSeg) {
     angle = lerpAngle(angle, heading(segIndex + 1), ((pos.t - (1 - TURN_ZONE)) / TURN_ZONE) * 0.5);
   } else if (pos.t < TURN_ZONE && segIndex > 0) {
     angle = lerpAngle(heading(segIndex - 1), angle, 0.5 + (pos.t / TURN_ZONE) * 0.5);
   }
 
-  drawTrain(ctx, sp.x, sp.y, angle, lineColor(path.hops[segIndex].lineId), Math.sqrt(view.scale));
+  if (path.segmentLines[segIndex] === "transfer") {
+    // Walking between platforms: a person-sized dot rather than a train.
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 5 * Math.sqrt(view.scale), 0, Math.PI * 2);
+    ctx.fillStyle = TRANSFER_COLOR;
+    ctx.fill();
+    ctx.strokeStyle = BG_COLOR;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    return;
+  }
+  drawTrain(ctx, sp.x, sp.y, angle, lineColor(path.segmentLines[segIndex]), Math.sqrt(view.scale));
 }
 
 // Interpolates between two angles the short way around.
@@ -786,7 +868,7 @@ function draw(ctx, width, height, view, time, ui) {
     pinnedIds = new Set([...endpointIds, currentSearchId]);
     priorityIds = endpointIds;
   } else if (journey) {
-    litStationIds = new Set(journey.path.stationIds);
+    litStationIds = new Set(journey.path.stopIds);
     pinnedIds = litStationIds;
     priorityIds = litStationIds;
   }
@@ -801,6 +883,12 @@ function draw(ctx, width, height, view, time, ui) {
   const visibleStationIds = Object.keys(STATIONS).filter((id) =>
     STATION_LINES[id].some((lid) => visibleLineIds.has(lid))
   );
+  const visibleIds = new Set(visibleStationIds);
+  for (const [a, b] of TRANSFERS) {
+    if (!visibleIds.has(a) || !visibleIds.has(b)) continue;
+    const dimmed = litStationIds ? !(litStationIds.has(a) && litStationIds.has(b)) : false;
+    drawTransfer(ctx, view, a, b, { dimmed });
+  }
   for (const id of visibleStationIds) {
     const dimmed = litStationIds ? !litStationIds.has(id) : false;
     drawStation(ctx, view, id, { dimmed, hovered: ui.hoveredStation });

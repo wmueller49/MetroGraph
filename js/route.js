@@ -1,25 +1,45 @@
 (function () {
-const { STATIONS, LINES } = window.MetroData;
+const { STATIONS, LINES, TRANSFERS } = window.MetroData;
 const { UNIT } = window.MetroRender;
 
 // Penalty (in world px) added when a route switches lines, so the router
 // prefers staying on one train over a marginally shorter path with an extra transfer.
 const TRANSFER_PENALTY = UNIT * 6;
 const START_MARK = "__start__";
+// Line id for walking between the separate platforms of one complex.
+const TRANSFER = "transfer";
 
+// Edges join consecutive stops of each line. An express hop's `via` lists the
+// stations it runs through between the two stops, in a -> b order, and its
+// distance is measured along that track.
 const ADJACENCY = (() => {
   const map = new Map();
+  const seen = new Set();
   for (const id of Object.keys(STATIONS)) map.set(id, []);
   for (const line of LINES) {
-    for (let i = 0; i < line.stops.length - 1; i++) {
-      const a = line.stops[i];
-      const b = line.stops[i + 1];
-      const sa = STATIONS[a];
-      const sb = STATIONS[b];
-      const dist = Math.hypot((sb.x - sa.x) * UNIT, (sb.y - sa.y) * UNIT);
-      map.get(a).push({ to: b, lineId: line.id, dist });
-      map.get(b).push({ to: a, lineId: line.id, dist });
+    for (const { path, stopsHere } of line.branches) {
+      const stopIdx = path.map((_, i) => i).filter((i) => stopsHere[i]);
+      for (let k = 0; k < stopIdx.length - 1; k++) {
+        const seq = path.slice(stopIdx[k], stopIdx[k + 1] + 1);
+        const a = seq[0];
+        const b = seq[seq.length - 1];
+        // Branches share their trunk, so each hop is only added once.
+        const key = `${line.id}:${a}:${b}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        seen.add(`${line.id}:${b}:${a}`);
+        let dist = 0;
+        for (let i = 0; i < seq.length - 1; i++) dist += straightLineDist(seq[i], seq[i + 1]);
+        const via = seq.slice(1, -1);
+        map.get(a).push({ to: b, lineId: line.id, dist, via });
+        map.get(b).push({ to: a, lineId: line.id, dist, via: [...via].reverse() });
+      }
     }
+  }
+  for (const [a, b] of TRANSFERS) {
+    const dist = straightLineDist(a, b);
+    map.get(a).push({ to: b, lineId: TRANSFER, dist, via: [] });
+    map.get(b).push({ to: a, lineId: TRANSFER, dist, via: [] });
   }
   return map;
 })();
@@ -33,7 +53,7 @@ const ALGORITHMS = [
 
 // Finds a route from startId to endId with the chosen search algorithm.
 // Returns { hops, explored } or null if start === end, where hops is the
-// ordered route [{ from, to, lineId }, ...] and explored is every station the
+// ordered route [{ from, to, lineId, via }, ...] and explored is every station the
 // search settled, in the order it reached them ([{ id, from }, ...], `from`
 // being the station it was reached from), so the search can be replayed.
 function findRoute(startId, endId, algorithm = "dijkstra") {
@@ -97,12 +117,15 @@ function bestFirstSearch(startId, endId, useHeuristic) {
     }
 
     for (const edge of ADJACENCY.get(stationId) || []) {
-      const transferPenalty = viaLine !== START_MARK && viaLine !== edge.lineId ? TRANSFER_PENALTY : 0;
+      // Changing trains costs a penalty, charged once when boarding the next
+      // train (so a walk between platforms isn't charged twice).
+      const transferPenalty =
+        viaLine !== START_MARK && viaLine !== edge.lineId && edge.lineId !== TRANSFER ? TRANSFER_PENALTY : 0;
       const nd = best + edge.dist + transferPenalty;
       const vState = `${edge.to}::${edge.lineId}`;
       if (nd < (dist.get(vState) ?? Infinity)) {
         dist.set(vState, nd);
-        prev.set(vState, { state: u, from: stationId, to: edge.to, lineId: edge.lineId });
+        prev.set(vState, { state: u, from: stationId, to: edge.to, lineId: edge.lineId, via: edge.via });
       }
     }
   }
@@ -113,7 +136,7 @@ function bestFirstSearch(startId, endId, useHeuristic) {
   let cur = endState;
   while (prev.has(cur)) {
     const p = prev.get(cur);
-    hops.push({ from: p.from, to: p.to, lineId: p.lineId });
+    hops.push({ from: p.from, to: p.to, lineId: p.lineId, via: p.via });
     cur = p.state;
   }
   hops.reverse();
@@ -155,9 +178,11 @@ function graphSearch(startId, endId, algorithm) {
 // boards whichever line runs furthest along the path, to avoid needless transfers.
 function assignLines(stationPath) {
   const edgeLines = [];
+  const edgeVia = [];
   for (let i = 0; i < stationPath.length - 1; i++) {
     const edges = ADJACENCY.get(stationPath[i]).filter((e) => e.to === stationPath[i + 1]);
     edgeLines.push(edges.map((e) => e.lineId));
+    edgeVia.push(Object.fromEntries(edges.map((e) => [e.lineId, e.via])));
   }
   const runLength = (lineId, from) => {
     let n = 0;
@@ -171,40 +196,56 @@ function assignLines(stationPath) {
     if (!edgeLines[i].includes(current)) {
       current = edgeLines[i].reduce((a, b) => (runLength(b, i) > runLength(a, i) ? b : a));
     }
-    hops.push({ from: stationPath[i], to: stationPath[i + 1], lineId: current });
+    hops.push({ from: stationPath[i], to: stationPath[i + 1], lineId: current, via: edgeVia[i][current] });
   }
   return hops;
 }
 
-// Builds a drawable/animatable path from route hops: world-space points,
-// cumulative distance at each point, and the line id serving each segment.
+// Builds a drawable/animatable path from route hops: every station passed
+// (express hops expanded through the stations they run past), world-space
+// points, cumulative distance at each point, and the line id serving each
+// segment. `stopIds` is just the stations the route stops at.
 function buildRoutePath(hops) {
-  const points = [STATIONS[hops[0].from]].concat(hops.map((h) => STATIONS[h.to]));
-  const worldPoints = points.map((s) => ({ x: s.x * UNIT, y: s.y * UNIT }));
+  const stationIds = [hops[0].from];
+  const segmentLines = [];
+  for (const hop of hops) {
+    for (const id of [...hop.via, hop.to]) {
+      stationIds.push(id);
+      segmentLines.push(hop.lineId);
+    }
+  }
+  const worldPoints = stationIds.map((id) => ({ x: STATIONS[id].x * UNIT, y: STATIONS[id].y * UNIT }));
   const cumulative = [0];
   for (let i = 1; i < worldPoints.length; i++) {
     const dx = worldPoints[i].x - worldPoints[i - 1].x;
     const dy = worldPoints[i].y - worldPoints[i - 1].y;
     cumulative.push(cumulative[i - 1] + Math.hypot(dx, dy));
   }
-  const stationIds = [hops[0].from, ...hops.map((h) => h.to)];
   return {
     points: worldPoints,
     stationIds,
+    stopIds: [hops[0].from, ...hops.map((h) => h.to)],
+    segmentLines,
     cumulative,
     total: cumulative[cumulative.length - 1],
     hops,
   };
 }
 
+// Train rides only, leaving out walks between platforms.
+function rideHops(hops) {
+  return hops.filter((h) => h.lineId !== TRANSFER);
+}
+
 function transferCount(hops) {
+  const rides = rideHops(hops);
   let count = 0;
-  for (let i = 1; i < hops.length; i++) {
-    if (hops[i].lineId !== hops[i - 1].lineId) count++;
+  for (let i = 1; i < rides.length; i++) {
+    if (rides[i].lineId !== rides[i - 1].lineId) count++;
   }
   return count;
 }
 
-window.MetroRoute = { ALGORITHMS, findRoute, buildRoutePath, transferCount };
+window.MetroRoute = { ALGORITHMS, TRANSFER, findRoute, buildRoutePath, rideHops, transferCount };
 
 })();
